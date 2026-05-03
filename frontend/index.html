@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LLM Adapter — Inference Gateway</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <style>
+        /* ─── Reset & Variables ──────────────────────────────── */
+        *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+
+        :root {
+            --bg-primary:    #0a0a0f;
+            --bg-secondary:  #111118;
+            --bg-card:       #16161f;
+            --bg-card-hover: #1c1c28;
+            --bg-input:      #1e1e2a;
+            --border:        #2a2a3a;
+            --border-light:  #3a3a4a;
+            --text-primary:  #e8e8f0;
+            --text-secondary:#8888a0;
+            --text-muted:    #5a5a72;
+            --accent:        #6c5ce7;
+            --accent-light:  #a29bfe;
+            --accent-glow:   rgba(108,92,231,.25);
+            --green:         #00d2a0;
+            --green-glow:    rgba(0,210,160,.2);
+            --orange:        #fdcb6e;
+            --red:           #ff6b6b;
+            --blue:          #74b9ff;
+            --pink:          #fd79a8;
+            --cyan:          #81ecec;
+            --radius:        12px;
+            --radius-lg:     18px;
+            --shadow:        0 4px 24px rgba(0,0,0,.4);
+            --shadow-glow:   0 0 30px var(--accent-glow);
+        }
+
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* ─── Animated Background ────────────────────────────── */
+        .bg-grid {
+            position: fixed; inset:0; z-index:0; pointer-events:none;
+            background-image:
+                linear-gradient(rgba(108,92,231,.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(108,92,231,.03) 1px, transparent 1px);
+            background-size: 60px 60px;
+        }
+        .bg-glow {
+            position:fixed; top:-200px; left:50%; transform:translateX(-50%);
+            width:800px; height:800px; border-radius:50%;
+            background: radial-gradient(circle, rgba(108,92,231,.08) 0%, transparent 70%);
+            z-index:0; pointer-events:none; animation: pulse 8s ease-in-out infinite;
+        }
+        @keyframes pulse { 0%,100%{opacity:.6;transform:translateX(-50%) scale(1)} 50%{opacity:1;transform:translateX(-50%) scale(1.1)} }
+
+        /* ─── Layout ─────────────────────────────────────────── */
+        .app { position:relative; z-index:1; min-height:100vh; display:flex; flex-direction:column; }
+
+        /* ─── Header ─────────────────────────────────────────── */
+        .header {
+            display:flex; align-items:center; justify-content:space-between;
+            padding: 16px 32px;
+            border-bottom: 1px solid var(--border);
+            background: rgba(10,10,15,.8);
+            backdrop-filter: blur(20px);
+            position: sticky; top:0; z-index:100;
+        }
+        .header-left { display:flex; align-items:center; gap:14px; }
+        .logo-icon {
+            width:40px; height:40px; border-radius:10px;
+            background: linear-gradient(135deg, var(--accent), #a29bfe);
+            display:flex; align-items:center; justify-content:center;
+            font-weight:800; font-size:18px; color:#fff;
+            box-shadow: 0 0 20px var(--accent-glow);
+        }
+        .header h1 { font-size:20px; font-weight:700; letter-spacing:-.3px; }
+        .header h1 span { color:var(--accent-light); }
+        .header-tag {
+            font-size:11px; font-weight:600; padding:4px 10px; border-radius:20px;
+            background: var(--accent-glow); color:var(--accent-light);
+            text-transform:uppercase; letter-spacing:.5px;
+        }
+        .header-right { display:flex; align-items:center; gap:12px; }
+        .status-dot {
+            width:8px; height:8px; border-radius:50%; background:var(--green);
+            box-shadow: 0 0 8px var(--green-glow);
+            animation: blink 2s ease-in-out infinite;
+        }
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.4} }
+        .status-text { font-size:13px; color:var(--text-secondary); }
+
+        /* ─── Main Grid ──────────────────────────────────────── */
+        .main { display:grid; grid-template-columns:1fr 420px; flex:1; overflow:hidden; }
+
+        /* ─── Dashboard (Left Panel) ─────────────────────────── */
+        .dashboard {
+            padding:24px; overflow-y:auto; max-height:calc(100vh - 65px);
+            scrollbar-width:thin; scrollbar-color:var(--border) transparent;
+        }
+        .section-title {
+            font-size:13px; font-weight:600; text-transform:uppercase;
+            letter-spacing:1px; color:var(--text-muted); margin-bottom:16px;
+            display:flex; align-items:center; gap:8px;
+        }
+        .section-title::before {
+            content:''; width:3px; height:14px; border-radius:2px;
+            background:var(--accent);
+        }
+
+        /* ─── Stat Cards Row ─────────────────────────────────── */
+        .stats-grid {
+            display:grid; grid-template-columns:repeat(4, 1fr); gap:14px;
+            margin-bottom:28px;
+        }
+        .stat-card {
+            background:var(--bg-card); border:1px solid var(--border);
+            border-radius:var(--radius); padding:18px 20px;
+            transition:all .25s ease; position:relative; overflow:hidden;
+        }
+        .stat-card:hover {
+            border-color:var(--accent); background:var(--bg-card-hover);
+            box-shadow: var(--shadow-glow);
+            transform: translateY(-2px);
+        }
+        .stat-card .label {
+            font-size:12px; color:var(--text-muted); font-weight:500;
+            text-transform:uppercase; letter-spacing:.5px; margin-bottom:8px;
+        }
+        .stat-card .value {
+            font-size:28px; font-weight:800; letter-spacing:-.5px;
+            font-family:'JetBrains Mono','Inter',monospace;
+        }
+        .stat-card .sub {
+            font-size:12px; color:var(--text-secondary); margin-top:4px;
+        }
+        .stat-card .icon {
+            position:absolute; top:14px; right:16px; font-size:20px; opacity:.6;
+        }
+        .val-green { color:var(--green); }
+        .val-blue { color:var(--blue); }
+        .val-orange { color:var(--orange); }
+        .val-pink { color:var(--pink); }
+        .val-accent { color:var(--accent-light); }
+
+        /* ─── Charts Grid ────────────────────────────────────── */
+        .charts-grid {
+            display:grid; grid-template-columns:1fr 1fr; gap:14px;
+            margin-bottom:28px;
+        }
+        .chart-card {
+            background:var(--bg-card); border:1px solid var(--border);
+            border-radius:var(--radius); padding:20px;
+        }
+        .chart-card h3 {
+            font-size:14px; font-weight:600; margin-bottom:16px;
+            display:flex; align-items:center; gap:8px;
+        }
+        .chart-container { position:relative; height:200px; }
+
+        /* ─── Info Panels ────────────────────────────────────── */
+        .panels-grid {
+            display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px;
+            margin-bottom:28px;
+        }
+        .info-panel {
+            background:var(--bg-card); border:1px solid var(--border);
+            border-radius:var(--radius); padding:20px;
+        }
+        .info-panel h3 {
+            font-size:14px; font-weight:600; margin-bottom:14px;
+            display:flex; align-items:center; gap:8px;
+        }
+        .info-row {
+            display:flex; justify-content:space-between; align-items:center;
+            padding:8px 0; border-bottom:1px solid rgba(42,42,58,.5);
+            font-size:13px;
+        }
+        .info-row:last-child { border:none; }
+        .info-row .key { color:var(--text-secondary); }
+        .info-row .val {
+            font-family:'JetBrains Mono',monospace; font-weight:600; font-size:13px;
+        }
+
+        /* Tier badges */
+        .tier-badge {
+            display:inline-flex; align-items:center; gap:5px;
+            padding:3px 10px; border-radius:6px; font-size:12px; font-weight:600;
+            font-family:'JetBrains Mono',monospace;
+        }
+        .tier-tiny   { background:rgba(0,210,160,.12); color:var(--green); }
+        .tier-small  { background:rgba(116,185,255,.12); color:var(--blue); }
+        .tier-medium { background:rgba(253,121,168,.12); color:var(--pink); }
+
+        /* ─── Request Log Table ───────────────────────────────── */
+        .log-table-wrap {
+            background:var(--bg-card); border:1px solid var(--border);
+            border-radius:var(--radius); overflow:hidden; margin-bottom:28px;
+        }
+        .log-table-wrap h3 {
+            font-size:14px; font-weight:600; padding:16px 20px;
+            border-bottom:1px solid var(--border);
+            display:flex; align-items:center; gap:8px;
+        }
+        .log-table {
+            width:100%; border-collapse:collapse; font-size:13px;
+        }
+        .log-table th {
+            text-align:left; padding:10px 16px; font-weight:600;
+            color:var(--text-muted); font-size:11px; text-transform:uppercase;
+            letter-spacing:.5px; background:var(--bg-secondary);
+        }
+        .log-table td {
+            padding:10px 16px; border-top:1px solid rgba(42,42,58,.4);
+            font-family:'JetBrains Mono',monospace; font-size:12px;
+        }
+        .log-table tr { transition:background .15s; }
+        .log-table tr:hover { background:var(--bg-card-hover); }
+        .log-table .query-col {
+            max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+            font-family:'Inter',sans-serif;
+        }
+
+        /* ─── Chat Panel (Right) ─────────────────────────────── */
+        .chat-panel {
+            display:flex; flex-direction:column;
+            border-left:1px solid var(--border);
+            background:var(--bg-secondary);
+            max-height:calc(100vh - 65px);
+        }
+        .chat-header {
+            padding:18px 20px; border-bottom:1px solid var(--border);
+            display:flex; align-items:center; justify-content:space-between;
+        }
+        .chat-header h2 { font-size:16px; font-weight:700; }
+        .chat-mode-toggle {
+            display:flex; background:var(--bg-card); border-radius:8px;
+            border:1px solid var(--border); overflow:hidden;
+        }
+        .chat-mode-btn {
+            padding:6px 14px; font-size:12px; font-weight:600;
+            background:transparent; color:var(--text-secondary);
+            border:none; cursor:pointer; transition:all .2s;
+        }
+        .chat-mode-btn.active {
+            background:var(--accent); color:#fff;
+        }
+
+        .chat-messages {
+            flex:1; overflow-y:auto; padding:16px 20px;
+            display:flex; flex-direction:column; gap:12px;
+            scrollbar-width:thin; scrollbar-color:var(--border) transparent;
+        }
+        .msg {
+            max-width:90%; padding:12px 16px;
+            border-radius:var(--radius); font-size:14px;
+            line-height:1.6; animation: msgIn .3s ease;
+        }
+        @keyframes msgIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
+
+        .msg-user {
+            align-self:flex-end;
+            background: linear-gradient(135deg, var(--accent), #a29bfe);
+            color:#fff; border-bottom-right-radius:4px;
+        }
+        .msg-assistant {
+            align-self:flex-start;
+            background:var(--bg-card); border:1px solid var(--border);
+            color:var(--text-primary); border-bottom-left-radius:4px;
+        }
+        .msg-meta {
+            font-size:11px; margin-top:6px; opacity:.7;
+            font-family:'JetBrains Mono',monospace;
+        }
+        .msg-user .msg-meta { color:rgba(255,255,255,.7); }
+
+        .typing-indicator {
+            display:none; align-self:flex-start; padding:12px 16px;
+            background:var(--bg-card); border:1px solid var(--border);
+            border-radius:var(--radius); border-bottom-left-radius:4px;
+        }
+        .typing-indicator.show { display:flex; gap:4px; align-items:center; }
+        .typing-dot {
+            width:7px; height:7px; border-radius:50%; background:var(--text-muted);
+            animation: typingBounce .6s ease-in-out infinite;
+        }
+        .typing-dot:nth-child(2) { animation-delay:.15s; }
+        .typing-dot:nth-child(3) { animation-delay:.3s; }
+        @keyframes typingBounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
+
+        .chat-input-wrap {
+            padding:16px 20px; border-top:1px solid var(--border);
+            background:var(--bg-secondary);
+        }
+        .chat-input-box {
+            display:flex; gap:10px;
+            background:var(--bg-input); border:1px solid var(--border);
+            border-radius:var(--radius); padding:4px 4px 4px 16px;
+            transition:border-color .2s;
+        }
+        .chat-input-box:focus-within { border-color:var(--accent); box-shadow:var(--shadow-glow); }
+        .chat-input {
+            flex:1; background:transparent; border:none; outline:none;
+            color:var(--text-primary); font-size:14px; font-family:'Inter',sans-serif;
+        }
+        .chat-input::placeholder { color:var(--text-muted); }
+        .send-btn {
+            background: linear-gradient(135deg, var(--accent), #a29bfe);
+            border:none; color:#fff; padding:10px 18px; border-radius:10px;
+            font-weight:600; font-size:13px; cursor:pointer;
+            transition: all .2s; display:flex; align-items:center; gap:6px;
+        }
+        .send-btn:hover { transform:scale(1.03); box-shadow:var(--shadow-glow); }
+        .send-btn:disabled { opacity:.5; cursor:not-allowed; transform:none; }
+
+        .session-bar {
+            padding:8px 20px; font-size:12px; color:var(--text-muted);
+            display:flex; align-items:center; gap:8px;
+            border-top:1px solid var(--border);
+        }
+        .session-bar input {
+            background:var(--bg-input); border:1px solid var(--border);
+            color:var(--text-primary); padding:4px 10px; border-radius:6px;
+            font-size:12px; font-family:'JetBrains Mono',monospace;
+            width:140px; outline:none;
+        }
+
+        /* ─── Scrollbar ──────────────────────────────────────── */
+        ::-webkit-scrollbar { width:6px; }
+        ::-webkit-scrollbar-track { background:transparent; }
+        ::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+
+        /* ─── Responsive ─────────────────────────────────────── */
+        @media (max-width:1100px) {
+            .main { grid-template-columns:1fr; }
+            .chat-panel { max-height:500px; border-left:none; border-top:1px solid var(--border); }
+            .stats-grid { grid-template-columns:repeat(2,1fr); }
+            .charts-grid { grid-template-columns:1fr; }
+            .panels-grid { grid-template-columns:1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-grid"></div>
+    <div class="bg-glow"></div>
+
+    <div class="app">
+        <!-- ─── Header ───────────────────────────────────── -->
+        <header class="header">
+            <div class="header-left">
+                <div class="logo-icon">A</div>
+                <h1>LLM<span>Adapter</span></h1>
+                <span class="header-tag">v0.1.0</span>
+            </div>
+            <div class="header-right">
+                <div class="status-dot" id="statusDot"></div>
+                <span class="status-text" id="statusText">Connecting...</span>
+            </div>
+        </header>
+
+        <!-- ─── Main ─────────────────────────────────────── -->
+        <div class="main">
+            <!-- ─── Dashboard ────────────────────────────── -->
+            <div class="dashboard">
+
+                <!-- Stat Cards -->
+                <div class="section-title">System Overview</div>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="icon">&#9889;</div>
+                        <div class="label">Total Requests</div>
+                        <div class="value val-accent" id="totalRequests">0</div>
+                        <div class="sub" id="reqRate">0 req/min</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="icon">&#128640;</div>
+                        <div class="label">Cache Hit Rate</div>
+                        <div class="value val-green" id="cacheRate">0%</div>
+                        <div class="sub" id="cacheDetail">0 hits / 0 misses</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="icon">&#128200;</div>
+                        <div class="label">Load Score</div>
+                        <div class="value val-orange" id="loadScore">0.00</div>
+                        <div class="sub" id="loadDetail">low</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="icon">&#129302;</div>
+                        <div class="label">GPU Status</div>
+                        <div class="value val-blue" id="gpuStatus">CPU</div>
+                        <div class="sub" id="gpuDetail">CPU-only mode</div>
+                    </div>
+                </div>
+
+                <!-- Charts -->
+                <div class="section-title">Analytics</div>
+                <div class="charts-grid">
+                    <div class="chart-card">
+                        <h3>&#128202; Model Tier Distribution</h3>
+                        <div class="chart-container"><canvas id="tierChart"></canvas></div>
+                    </div>
+                    <div class="chart-card">
+                        <h3>&#9201; Latency Over Time</h3>
+                        <div class="chart-container"><canvas id="latencyChart"></canvas></div>
+                    </div>
+                    <div class="chart-card">
+                        <h3>&#11088; Quality Scores</h3>
+                        <div class="chart-container"><canvas id="qualityChart"></canvas></div>
+                    </div>
+                    <div class="chart-card">
+                        <h3>&#128176; Cost Per Request</h3>
+                        <div class="chart-container"><canvas id="costChart"></canvas></div>
+                    </div>
+                </div>
+
+                <!-- Info Panels -->
+                <div class="section-title">Routing Intelligence</div>
+                <div class="panels-grid">
+                    <div class="info-panel">
+                        <h3>&#127919; UCB Bandit</h3>
+                        <div id="banditPanel">
+                            <div class="info-row"><span class="key">Loading...</span></div>
+                        </div>
+                    </div>
+                    <div class="info-panel">
+                        <h3>&#128451; Cache Engine</h3>
+                        <div id="cachePanel">
+                            <div class="info-row"><span class="key">Loading...</span></div>
+                        </div>
+                    </div>
+                    <div class="info-panel">
+                        <h3>&#128187; GPU Monitor</h3>
+                        <div id="gpuPanel">
+                            <div class="info-row"><span class="key">Loading...</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Request Log -->
+                <div class="section-title">Recent Requests</div>
+                <div class="log-table-wrap">
+                    <table class="log-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Query</th>
+                                <th>Tier</th>
+                                <th>Latency</th>
+                                <th>Tokens</th>
+                                <th>Cached</th>
+                                <th>Quality</th>
+                            </tr>
+                        </thead>
+                        <tbody id="logBody">
+                            <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px">No requests yet. Send a message to get started.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ─── Chat Panel ───────────────────────────── -->
+            <div class="chat-panel">
+                <div class="chat-header">
+                    <h2>Chat</h2>
+                    <div class="chat-mode-toggle">
+                        <button class="chat-mode-btn active" data-mode="normal" onclick="setMode('normal')">Normal</button>
+                        <button class="chat-mode-btn" data-mode="stream" onclick="setMode('stream')">Stream</button>
+                    </div>
+                </div>
+
+                <div class="chat-messages" id="chatMessages">
+                    <div class="msg msg-assistant">
+                        Welcome to <strong>LLM Adapter</strong>. I route your queries to the optimal model tier based on complexity, load, and cost. Try asking me something!
+                        <div class="msg-meta">system</div>
+                    </div>
+                </div>
+
+                <div class="typing-indicator" id="typingIndicator">
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                </div>
+
+                <div class="chat-input-wrap">
+                    <div class="chat-input-box">
+                        <input type="text" class="chat-input" id="chatInput"
+                            placeholder="Ask anything..." autocomplete="off"
+                            onkeydown="if(event.key==='Enter')sendMessage()" />
+                        <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+                            Send &#10148;
+                        </button>
+                    </div>
+                </div>
+                <div class="session-bar">
+                    Session:
+                    <input type="text" id="sessionId" value="default" />
+                </div>
+            </div>
+        </div>
+    </div>
+
+<script>
+// ─── Config ─────────────────────────────────────────────
+const API = window.location.origin;
+let chatMode = 'normal'; // 'normal' or 'stream'
+let requestLog = [];
+let requestCount = 0;
+let startTime = Date.now();
+
+// ─── Charts Setup ───────────────────────────────────────
+const chartColors = {
+    tiny:   { bg: 'rgba(0,210,160,.2)',   border: '#00d2a0' },
+    small:  { bg: 'rgba(116,185,255,.2)', border: '#74b9ff' },
+    medium: { bg: 'rgba(253,121,168,.2)', border: '#fd79a8' },
+};
+
+const tierCtx = document.getElementById('tierChart').getContext('2d');
+const tierChart = new Chart(tierCtx, {
+    type: 'doughnut',
+    data: {
+        labels: ['Tiny', 'Small', 'Medium'],
+        datasets: [{
+            data: [0, 0, 0],
+            backgroundColor: ['#00d2a0', '#74b9ff', '#fd79a8'],
+            borderColor: '#16161f',
+            borderWidth: 3,
+        }]
+    },
+    options: {
+        responsive: true, maintainAspectRatio: false,
+        cutout: '65%',
+        plugins: {
+            legend: { position:'bottom', labels:{ color:'#8888a0', font:{size:12, family:'Inter'}, padding:14 } }
+        }
+    }
+});
+
+const latencyCtx = document.getElementById('latencyChart').getContext('2d');
+const latencyChart = new Chart(latencyCtx, {
+    type: 'line',
+    data: {
+        labels: [],
+        datasets: [{
+            label: 'Latency (s)',
+            data: [],
+            borderColor: '#fdcb6e',
+            backgroundColor: 'rgba(253,203,110,.1)',
+            fill: true, tension: .4, pointRadius: 3, pointBackgroundColor: '#fdcb6e',
+            borderWidth: 2,
+        }]
+    },
+    options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: {
+            x: { display: false },
+            y: { ticks:{color:'#5a5a72', font:{size:11}}, grid:{color:'rgba(42,42,58,.4)'}, beginAtZero:true }
+        },
+        plugins: { legend:{display:false} }
+    }
+});
+
+const qualityCtx = document.getElementById('qualityChart').getContext('2d');
+const qualityChart = new Chart(qualityCtx, {
+    type: 'bar',
+    data: {
+        labels: ['Tiny', 'Small', 'Medium'],
+        datasets: [{
+            label: 'Avg Quality',
+            data: [0, 0, 0],
+            backgroundColor: ['rgba(0,210,160,.6)', 'rgba(116,185,255,.6)', 'rgba(253,121,168,.6)'],
+            borderColor: ['#00d2a0', '#74b9ff', '#fd79a8'],
+            borderWidth: 2, borderRadius: 6,
+        }]
+    },
+    options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: {
+            x: { ticks:{color:'#5a5a72'}, grid:{display:false} },
+            y: { ticks:{color:'#5a5a72', font:{size:11}}, grid:{color:'rgba(42,42,58,.4)'}, min:0, max:1 }
+        },
+        plugins: { legend:{display:false} }
+    }
+});
+
+const costCtx = document.getElementById('costChart').getContext('2d');
+const costChart = new Chart(costCtx, {
+    type: 'line',
+    data: {
+        labels: [],
+        datasets: [{
+            label: 'Cost',
+            data: [],
+            borderColor: '#a29bfe',
+            backgroundColor: 'rgba(162,155,254,.1)',
+            fill:true, tension:.4, pointRadius:3, pointBackgroundColor:'#a29bfe',
+            borderWidth:2,
+        }]
+    },
+    options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: {
+            x: { display:false },
+            y: { ticks:{color:'#5a5a72', font:{size:11}}, grid:{color:'rgba(42,42,58,.4)'}, beginAtZero:true }
+        },
+        plugins:{ legend:{display:false} }
+    }
+});
+
+// ─── Tier tracking ──────────────────────────────────────
+let tierCounts = { tiny:0, small:0, medium:0 };
+let qualityTotals = { tiny:{sum:0,count:0}, small:{sum:0,count:0}, medium:{sum:0,count:0} };
+
+// ─── Mode Toggle ────────────────────────────────────────
+function setMode(mode) {
+    chatMode = mode;
+    document.querySelectorAll('.chat-mode-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.mode === mode);
+    });
+}
+
+// ─── Send Message ───────────────────────────────────────
+async function sendMessage() {
+    const input = document.getElementById('chatInput');
+    const query = input.value.trim();
+    if (!query) return;
+
+    input.value = '';
+    const sessionId = document.getElementById('sessionId').value || 'default';
+    addChatMsg(query, 'user');
+
+    const sendBtn = document.getElementById('sendBtn');
+    sendBtn.disabled = true;
+    showTyping(true);
+
+    const startT = performance.now();
+
+    try {
+        if (chatMode === 'stream') {
+            await sendStream(query, sessionId, startT);
+        } else {
+            await sendNormal(query, sessionId, startT);
+        }
+    } catch(e) {
+        addChatMsg('Error: ' + e.message, 'assistant', { tier:'error' });
+    }
+
+    sendBtn.disabled = false;
+    showTyping(false);
+}
+
+async function sendNormal(query, sessionId, startT) {
+    const res = await fetch(`${API}/generate`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ query, session_id: sessionId })
+    });
+    const data = await res.json();
+    const elapsed = ((performance.now() - startT) / 1000).toFixed(2);
+
+    addChatMsg(data.response, 'assistant', {
+        tier: data.model_used,
+        latency: elapsed + 's',
+        tokens: data.tokens,
+        cached: data.cached,
+    });
+
+    logRequest(query, data, elapsed);
+}
+
+async function sendStream(query, sessionId, startT) {
+    const res = await fetch(`${API}/generate/stream`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ query, session_id: sessionId })
+    });
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = '';
+
+    const msgEl = addChatMsg('', 'assistant', { tier:'streaming' }, true);
+    const contentEl = msgEl.querySelector('.msg-content');
+
+    showTyping(false);
+
+    while(true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, {stream:true});
+        fullText += chunk;
+        contentEl.textContent = fullText;
+        msgEl.scrollIntoView({behavior:'smooth', block:'end'});
+    }
+
+    const elapsed = ((performance.now() - startT) / 1000).toFixed(2);
+    const metaEl = msgEl.querySelector('.msg-meta');
+    metaEl.textContent = `streamed | ${elapsed}s`;
+
+    logRequest(query, { model_used:'stream', tokens: fullText.split(' ').length, cached:false, response:fullText }, elapsed);
+}
+
+// ─── Chat Helpers ───────────────────────────────────────
+function addChatMsg(text, role, meta={}, returnEl=false) {
+    const container = document.getElementById('chatMessages');
+    const div = document.createElement('div');
+    div.className = `msg msg-${role}`;
+
+    let metaHTML = '';
+    if (role === 'assistant' && meta.tier) {
+        const parts = [];
+        if (meta.tier && meta.tier !== 'streaming') parts.push(meta.tier);
+        if (meta.latency) parts.push(meta.latency);
+        if (meta.tokens) parts.push(meta.tokens + ' tokens');
+        if (meta.cached) parts.push('cached');
+        metaHTML = `<div class="msg-meta">${parts.join(' | ')}</div>`;
+    }
+
+    div.innerHTML = `<span class="msg-content">${text}</span>${metaHTML}`;
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+
+    if (returnEl) return div;
+}
+
+function showTyping(show) {
+    document.getElementById('typingIndicator').classList.toggle('show', show);
+}
+
+// ─── Log & Update Dashboard ─────────────────────────────
+function logRequest(query, data, elapsed) {
+    requestCount++;
+    const tier = data.model_used || 'unknown';
+
+    // Update tier counts
+    if (tierCounts[tier] !== undefined) tierCounts[tier]++;
+
+    // Update charts
+    tierChart.data.datasets[0].data = [tierCounts.tiny, tierCounts.small, tierCounts.medium];
+    tierChart.update();
+
+    // Latency chart
+    const labels = latencyChart.data.labels;
+    labels.push('#' + requestCount);
+    latencyChart.data.datasets[0].data.push(parseFloat(elapsed));
+    if (labels.length > 20) { labels.shift(); latencyChart.data.datasets[0].data.shift(); }
+    latencyChart.update();
+
+    // Cost chart (approximate)
+    const costVal = (data.tokens || 0) * 0.000002;
+    costChart.data.labels.push('#' + requestCount);
+    costChart.data.datasets[0].data.push(costVal);
+    if (costChart.data.labels.length > 20) { costChart.data.labels.shift(); costChart.data.datasets[0].data.shift(); }
+    costChart.update();
+
+    // Stats cards
+    document.getElementById('totalRequests').textContent = requestCount;
+    const elapsed_min = (Date.now() - startTime) / 60000;
+    document.getElementById('reqRate').textContent = (requestCount / Math.max(elapsed_min, .1)).toFixed(1) + ' req/min';
+
+    // Update load score
+    if (data.load_score !== undefined) {
+        document.getElementById('loadScore').textContent = data.load_score.toFixed(3);
+        const level = data.load_score < .3 ? 'low' : data.load_score < .6 ? 'moderate' : 'high';
+        document.getElementById('loadDetail').textContent = level;
+    }
+
+    // Request log table
+    requestLog.unshift({ query, tier, latency: elapsed, tokens: data.tokens, cached: data.cached });
+    if (requestLog.length > 50) requestLog.pop();
+    renderLogTable();
+}
+
+function renderLogTable() {
+    const tbody = document.getElementById('logBody');
+    tbody.innerHTML = requestLog.map((r, i) => `
+        <tr>
+            <td>${requestLog.length - i}</td>
+            <td class="query-col">${escapeHtml(r.query)}</td>
+            <td><span class="tier-badge tier-${r.tier}">${r.tier}</span></td>
+            <td>${r.latency}s</td>
+            <td>${r.tokens || 0}</td>
+            <td>${r.cached ? '<span style="color:var(--green)">HIT</span>' : '<span style="color:var(--text-muted)">MISS</span>'}</td>
+            <td>-</td>
+        </tr>
+    `).join('');
+}
+
+function escapeHtml(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+}
+
+// ─── Periodic Stats Polling ─────────────────────────────
+async function pollStats() {
+    try {
+        const [cacheRes, banditRes, gpuRes] = await Promise.all([
+            fetch(`${API}/cache/stats`).then(r=>r.json()).catch(()=>null),
+            fetch(`${API}/bandit/stats`).then(r=>r.json()).catch(()=>null),
+            fetch(`${API}/gpu`).then(r=>r.json()).catch(()=>null),
+        ]);
+
+        // Cache panel
+        if (cacheRes) {
+            const hitPct = (cacheRes.hit_rate * 100).toFixed(1);
+            document.getElementById('cacheRate').textContent = hitPct + '%';
+            document.getElementById('cacheDetail').textContent = `${cacheRes.hits} hits / ${cacheRes.misses} misses`;
+
+            document.getElementById('cachePanel').innerHTML = `
+                <div class="info-row"><span class="key">Hit Rate</span><span class="val val-green">${hitPct}%</span></div>
+                <div class="info-row"><span class="key">Threshold</span><span class="val">${cacheRes.threshold}</span></div>
+                <div class="info-row"><span class="key">Cache Size</span><span class="val">${cacheRes.cache_size}</span></div>
+                <div class="info-row"><span class="key">Hits</span><span class="val val-green">${cacheRes.hits}</span></div>
+                <div class="info-row"><span class="key">Misses</span><span class="val">${cacheRes.misses}</span></div>
+            `;
+        }
+
+        // Bandit panel
+        if (banditRes) {
+            let html = '';
+            for (const tier of ['tiny','small','medium']) {
+                if (banditRes[tier]) {
+                    const d = banditRes[tier];
+                    html += `
+                        <div class="info-row">
+                            <span class="key"><span class="tier-badge tier-${tier}">${tier}</span></span>
+                            <span class="val">${d.avg_reward} (n=${d.count})</span>
+                        </div>`;
+                }
+            }
+            html += `<div class="info-row"><span class="key">Total Pulls</span><span class="val val-accent">${banditRes.total || 0}</span></div>`;
+            document.getElementById('banditPanel').innerHTML = html;
+        }
+
+        // GPU panel
+        if (gpuRes) {
+            const gpuAvail = gpuRes.gpu_available;
+            document.getElementById('gpuStatus').textContent = gpuAvail ? 'GPU' : 'CPU';
+            document.getElementById('gpuDetail').textContent = gpuAvail
+                ? gpuRes.gpu_info?.name || 'Detected'
+                : 'CPU-only mode';
+
+            let html = `
+                <div class="info-row"><span class="key">Available</span><span class="val ${gpuAvail ? 'val-green' : 'val-orange'}">${gpuAvail ? 'Yes' : 'No'}</span></div>
+                <div class="info-row"><span class="key">Memory Pressure</span><span class="val">${(gpuRes.memory_pressure*100).toFixed(1)}%</span></div>
+                <div class="info-row"><span class="key">Utilization</span><span class="val">${(gpuRes.gpu_utilization*100).toFixed(1)}%</span></div>
+                <div class="info-row"><span class="key">Routing Hint</span><span class="val"><span class="tier-badge tier-${gpuRes.routing_hint}">${gpuRes.routing_hint}</span></span></div>
+            `;
+            if (gpuAvail && gpuRes.gpu_info?.name) {
+                html = `<div class="info-row"><span class="key">GPU</span><span class="val val-blue">${gpuRes.gpu_info.name}</span></div>` + html;
+            }
+            document.getElementById('gpuPanel').innerHTML = html;
+        }
+
+        // Quality chart update from bandit data
+        if (banditRes) {
+            const qData = ['tiny','small','medium'].map(t =>
+                banditRes[t] ? banditRes[t].avg_reward : 0
+            );
+            qualityChart.data.datasets[0].data = qData;
+            qualityChart.update();
+        }
+
+        // Connection status
+        document.getElementById('statusDot').style.background = 'var(--green)';
+        document.getElementById('statusText').textContent = 'Connected';
+
+    } catch(e) {
+        document.getElementById('statusDot').style.background = 'var(--red)';
+        document.getElementById('statusText').textContent = 'Disconnected';
+    }
+}
+
+// ─── Health check on load ───────────────────────────────
+async function checkHealth() {
+    try {
+        const res = await fetch(`${API}/health`);
+        if (res.ok) {
+            document.getElementById('statusDot').style.background = 'var(--green)';
+            document.getElementById('statusText').textContent = 'Connected';
+        }
+    } catch {
+        document.getElementById('statusDot').style.background = 'var(--red)';
+        document.getElementById('statusText').textContent = 'Server offline';
+    }
+}
+
+// ─── Init ───────────────────────────────────────────────
+checkHealth();
+pollStats();
+setInterval(pollStats, 5000);
+document.getElementById('chatInput').focus();
+</script>
+</body>
+</html>

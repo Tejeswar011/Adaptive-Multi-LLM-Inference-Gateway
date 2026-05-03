@@ -1,0 +1,5 @@
+memory:
+  short_term_turn_limit: 8
+  token_limit: 2500
+  summary_target_tokens: 300
+  similarity_prune_threshold: 0.92
